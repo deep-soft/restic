@@ -201,7 +201,8 @@ change
 +------------------+--------------------------------------------------------------+
 | ``modifier``     | Type of change, a concatenation of the following characters: |
 |                  | "+" = added, "-" = removed, "T" = entry type changed,        |
-|                  | "M" = file content changed, "U" = metadata changed           |
+|                  | "M" = file content changed, "U" = metadata changed,          |
+|                  | "?" = bitrot detected                                        |
 +------------------+--------------------------------------------------------------+
 
 statistics
@@ -556,7 +557,7 @@ The snapshots command returns a single JSON object, an array with objects of the
 stats
 -----
 
-The snapshots command returns a single JSON object.
+The stats command returns a single JSON object.
 
 +------------------------------+-----------------------------------------------------+
 | ``total_size``               | Repository size in bytes                            |
