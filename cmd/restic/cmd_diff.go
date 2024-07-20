@@ -33,13 +33,16 @@ Metadata comparison will likely not work if a backup was created using the
 '--ignore-inode' or '--ignore-ctime' option.
 
 To only compare files in specific subfolders, you can use the
-"<snapshotID>:<subfolder>" syntax, where "subfolder" is a path within the
+"snapshotID:subfolder" syntax, where "subfolder" is a path within the
 snapshot.
 
 EXIT STATUS
 ===========
 
-Exit status is 0 if the command was successful, and non-zero if there was any error.
+Exit status is 0 if the command was successful.
+Exit status is 1 if there was any error.
+Exit status is 10 if the repository does not exist.
+Exit status is 11 if the repository is already locked.
 `,
 	DisableAutoGenTag: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -156,7 +159,7 @@ func updateBlobs(repo restic.Loader, blobs restic.BlobSet, stats *DiffStat) {
 			stats.TreeBlobs++
 		}
 
-		size, found := repo.LookupBlobSize(h.ID, h.Type)
+		size, found := repo.LookupBlobSize(h.Type, h.ID)
 		if !found {
 			Warnf("unable to find blob size for %v\n", h)
 			continue
@@ -344,19 +347,11 @@ func runDiff(ctx context.Context, opts DiffOptions, gopts GlobalOptions, args []
 		return errors.Fatalf("specify two snapshot IDs")
 	}
 
-	repo, err := OpenRepository(ctx, gopts)
+	ctx, repo, unlock, err := openWithReadLock(ctx, gopts, gopts.NoLock)
 	if err != nil {
 		return err
 	}
-
-	if !gopts.NoLock {
-		var lock *restic.Lock
-		lock, ctx, err = lockRepo(ctx, repo, gopts.RetryLock, gopts.JSON)
-		defer unlockRepo(lock)
-		if err != nil {
-			return err
-		}
-	}
+	defer unlock()
 
 	// cache snapshots listing
 	be, err := restic.MemorizeList(ctx, repo, restic.SnapshotFile)

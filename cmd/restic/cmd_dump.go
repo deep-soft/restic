@@ -28,13 +28,16 @@ The special snapshotID "latest" can be used to use the latest snapshot in the
 repository.
 
 To include the folder content at the root of the archive, you can use the
-"<snapshotID>:<subfolder>" syntax, where "subfolder" is a path within the
+"snapshotID:subfolder" syntax, where "subfolder" is a path within the
 snapshot.
 
 EXIT STATUS
 ===========
 
-Exit status is 0 if the command was successful, and non-zero if there was any error.
+Exit status is 0 if the command was successful.
+Exit status is 1 if there was any error.
+Exit status is 10 if the repository does not exist.
+Exit status is 11 if the repository is already locked.
 `,
 	DisableAutoGenTag: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -131,19 +134,11 @@ func runDump(ctx context.Context, opts DumpOptions, gopts GlobalOptions, args []
 
 	splittedPath := splitPath(path.Clean(pathToPrint))
 
-	repo, err := OpenRepository(ctx, gopts)
+	ctx, repo, unlock, err := openWithReadLock(ctx, gopts, gopts.NoLock)
 	if err != nil {
 		return err
 	}
-
-	if !gopts.NoLock {
-		var lock *restic.Lock
-		lock, ctx, err = lockRepo(ctx, repo, gopts.RetryLock, gopts.JSON)
-		defer unlockRepo(lock)
-		if err != nil {
-			return err
-		}
-	}
+	defer unlock()
 
 	sn, subfolder, err := (&restic.SnapshotFilter{
 		Hosts: opts.Hosts,

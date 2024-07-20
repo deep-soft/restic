@@ -201,15 +201,16 @@ scheme like this:
     $ restic -r rest:http://host:8000/ init
 
 Depending on your REST server setup, you can use HTTPS protocol,
-password protection, multiple repositories or any combination of
-those features. The TCP/IP port is also configurable. Here
-are some more examples:
+unix socket, password protection, multiple repositories or any
+combination of those features. The TCP/IP port is also configurable.
+Here are some more examples:
 
 .. code-block:: console
 
     $ restic -r rest:https://host:8000/ init
     $ restic -r rest:https://user:pass@host:8000/ init
     $ restic -r rest:https://user:pass@host:8000/my_backup_repo/ init
+    $ restic -r rest:http+unix:///tmp/rest.socket:/my_backup_repo/ init
 
 The server username and password can be specified using environment
 variables as well:
@@ -549,16 +550,22 @@ For authentication export one of the following variables:
     # For SAS
     $ export AZURE_ACCOUNT_SAS=<SAS_TOKEN>
 
-For authentication using ``az login`` set the resource group name and ensure the user has
-the minimum permissions of the role assignment ``Storage Blob Data Contributor`` on Azure RBAC.
+For authentication using ``az login`` ensure the user has
+the minimum permissions of the role assignment ``Storage Blob Data Contributor`` on Azure RBAC
+for the storage account.
 
 .. code-block:: console
 
-    $ export AZURE_RESOURCE_GROUP=<RESOURCE_GROUP_NAME>
     $ az login
 
-Alternatively, if run on Azure, restic will automatically uses service accounts configured
+Alternatively, if run on Azure, restic will automatically use service accounts configured
 via the standard environment variables or Workload / Managed Identities.
+
+To enforce the use of the Azure CLI credential when other credentials are present, set the following environment variable:
+
+.. code-block:: console
+
+    $ export AZURE_FORCE_CLI_CREDENTIAL=true
 
 Restic will by default use Azure's global domain ``core.windows.net`` as endpoint suffix.
 You can specify other suffixes as follows:
@@ -845,3 +852,26 @@ and then grants read/write permissions for group access.
 .. note:: To manage who has access to the repository you can use
           ``usermod`` on Linux systems, to change which group controls
           repository access ``chgrp -R`` is your friend.
+
+
+Repositories with empty password
+********************************
+
+Restic by default refuses to create or operate on repositories that use an
+empty password. Since restic 0.17.0, the option ``--insecure-no-password`` allows
+disabling this check. Restic will not prompt for a password when using this option.
+Specifying ``--insecure-no-password`` while also passing a password to restic
+via a CLI option or via environment variable results in an error.
+
+For security reasons, the option must always be specified when operating on
+repositories with an empty password. For example to create a new repository
+with an empty password, use the following command.
+
+.. code-block:: console
+
+    restic init --insecure-no-password
+
+
+The ``init`` and ``copy`` command also support the option ``--from-insecure-no-password``
+which applies to the source repository. The ``key add`` and ``key passwd`` commands
+include the ``--new-insecure-no-password`` option to add or set and empty password.
