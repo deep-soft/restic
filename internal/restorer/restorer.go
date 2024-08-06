@@ -278,7 +278,7 @@ func (res *Restorer) restoreNodeTo(ctx context.Context, node *restic.Node, targe
 		}
 	}
 
-	res.opts.Progress.AddProgress(location, restoreui.ActionFileRestored, 0, 0)
+	res.opts.Progress.AddProgress(location, restoreui.ActionOtherRestored, 0, 0)
 	return res.restoreNodeMetadataTo(node, target, location)
 }
 
@@ -305,7 +305,7 @@ func (res *Restorer) restoreHardlinkAt(node *restic.Node, target, path, location
 		}
 	}
 
-	res.opts.Progress.AddProgress(location, restoreui.ActionFileRestored, 0, 0)
+	res.opts.Progress.AddProgress(location, restoreui.ActionOtherRestored, 0, 0)
 	// TODO investigate if hardlinks have separate metadata on any supported system
 	return res.restoreNodeMetadataTo(node, path, location)
 }
@@ -450,7 +450,7 @@ func (res *Restorer) RestoreTo(ctx context.Context, dst string) error {
 		},
 		leaveDir: func(node *restic.Node, target, location string, expectedFilenames []string) error {
 			if res.opts.Delete {
-				if err := res.removeUnexpectedFiles(target, location, expectedFilenames); err != nil {
+				if err := res.removeUnexpectedFiles(ctx, target, location, expectedFilenames); err != nil {
 					return err
 				}
 			}
@@ -469,7 +469,7 @@ func (res *Restorer) RestoreTo(ctx context.Context, dst string) error {
 	return err
 }
 
-func (res *Restorer) removeUnexpectedFiles(target, location string, expectedFilenames []string) error {
+func (res *Restorer) removeUnexpectedFiles(ctx context.Context, target, location string, expectedFilenames []string) error {
 	if !res.opts.Delete {
 		panic("internal error")
 	}
@@ -487,6 +487,10 @@ func (res *Restorer) removeUnexpectedFiles(target, location string, expectedFile
 	}
 
 	for _, entry := range entries {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if _, ok := keep[toComparableFilename(entry)]; ok {
 			continue
 		}
