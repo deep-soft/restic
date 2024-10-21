@@ -41,6 +41,7 @@ Exit status is 0 if the command was successful.
 Exit status is 1 if there was any error.
 Exit status is 10 if the repository does not exist.
 Exit status is 11 if the repository is already locked.
+Exit status is 12 if the password is incorrect.
 `,
 	DisableAutoGenTag: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,7 +92,11 @@ func runRepairSnapshots(ctx context.Context, gopts GlobalOptions, opts RepairOpt
 	// - files whose contents are not fully available  (-> file will be modified)
 	rewriter := walker.NewTreeRewriter(walker.RewriteOpts{
 		RewriteNode: func(node *restic.Node, path string) *restic.Node {
-			if node.Type != "file" {
+			if node.Type == restic.NodeTypeIrregular || node.Type == restic.NodeTypeInvalid {
+				Verbosef("  file %q: removed node with invalid type %q\n", path, node.Type)
+				return nil
+			}
+			if node.Type != restic.NodeTypeFile {
 				return node
 			}
 

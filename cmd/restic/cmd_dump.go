@@ -38,7 +38,9 @@ Exit status is 0 if the command was successful.
 Exit status is 1 if there was any error.
 Exit status is 10 if the repository does not exist.
 Exit status is 11 if the repository is already locked.
+Exit status is 12 if the password is incorrect.
 `,
+	GroupID:           cmdGroupDefault,
 	DisableAutoGenTag: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDump(cmd.Context(), dumpOptions, globalOptions, args)
@@ -93,15 +95,15 @@ func printFromTree(ctx context.Context, tree *restic.Tree, repo restic.BlobLoade
 		// first item it finds and dump that according to the switch case below.
 		if node.Name == pathComponents[0] {
 			switch {
-			case l == 1 && dump.IsFile(node):
+			case l == 1 && node.Type == restic.NodeTypeFile:
 				return d.WriteNode(ctx, node)
-			case l > 1 && dump.IsDir(node):
+			case l > 1 && node.Type == restic.NodeTypeDir:
 				subtree, err := restic.LoadTree(ctx, repo, *node.Subtree)
 				if err != nil {
 					return errors.Wrapf(err, "cannot load subtree for %q", item)
 				}
 				return printFromTree(ctx, subtree, repo, item, pathComponents[1:], d, canWriteArchiveFunc)
-			case dump.IsDir(node):
+			case node.Type == restic.NodeTypeDir:
 				if err := canWriteArchiveFunc(); err != nil {
 					return err
 				}
@@ -112,7 +114,7 @@ func printFromTree(ctx context.Context, tree *restic.Tree, repo restic.BlobLoade
 				return d.DumpTree(ctx, subtree, item)
 			case l > 1:
 				return fmt.Errorf("%q should be a dir, but is a %q", item, node.Type)
-			case !dump.IsFile(node):
+			case node.Type != restic.NodeTypeFile:
 				return fmt.Errorf("%q should be a file, but is a %q", item, node.Type)
 			}
 		}

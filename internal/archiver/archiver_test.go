@@ -3,6 +3,7 @@ package archiver
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -555,8 +556,8 @@ func rename(t testing.TB, oldname, newname string) {
 	}
 }
 
-func nodeFromFI(t testing.TB, filename string, fi os.FileInfo) *restic.Node {
-	node, err := restic.NodeFromFileInfo(filename, fi, false)
+func nodeFromFI(t testing.TB, fs fs.FS, filename string, fi os.FileInfo) *restic.Node {
+	node, err := fs.NodeFromFileInfo(filename, fi, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -685,10 +686,11 @@ func TestFileChanged(t *testing.T) {
 			}
 			save(t, filename, content)
 
+			fs := &fs.Local{}
 			fiBefore := lstat(t, filename)
-			node := nodeFromFI(t, filename, fiBefore)
+			node := nodeFromFI(t, fs, filename, fiBefore)
 
-			if fileChanged(fiBefore, node, 0) {
+			if fileChanged(fs, fiBefore, node, 0) {
 				t.Fatalf("unchanged file detected as changed")
 			}
 
@@ -698,12 +700,12 @@ func TestFileChanged(t *testing.T) {
 
 			if test.SameFile {
 				// file should be detected as unchanged
-				if fileChanged(fiAfter, node, test.ChangeIgnore) {
+				if fileChanged(fs, fiAfter, node, test.ChangeIgnore) {
 					t.Fatalf("unmodified file detected as changed")
 				}
 			} else {
 				// file should be detected as changed
-				if !fileChanged(fiAfter, node, test.ChangeIgnore) && !test.SameFile {
+				if !fileChanged(fs, fiAfter, node, test.ChangeIgnore) && !test.SameFile {
 					t.Fatalf("modified file detected as unchanged")
 				}
 			}
@@ -720,16 +722,16 @@ func TestFilChangedSpecialCases(t *testing.T) {
 
 	t.Run("nil-node", func(t *testing.T) {
 		fi := lstat(t, filename)
-		if !fileChanged(fi, nil, 0) {
+		if !fileChanged(&fs.Local{}, fi, nil, 0) {
 			t.Fatal("nil node detected as unchanged")
 		}
 	})
 
 	t.Run("type-change", func(t *testing.T) {
 		fi := lstat(t, filename)
-		node := nodeFromFI(t, filename, fi)
-		node.Type = "symlink"
-		if !fileChanged(fi, node, 0) {
+		node := nodeFromFI(t, &fs.Local{}, filename, fi)
+		node.Type = "restic.NodeTypeSymlink"
+		if !fileChanged(&fs.Local{}, fi, node, 0) {
 			t.Fatal("node with changed type detected as unchanged")
 		}
 	})
@@ -844,7 +846,7 @@ func TestArchiverSaveDir(t *testing.T) {
 			back := rtest.Chdir(t, chdir)
 			defer back()
 
-			fi, err := fs.Lstat(test.target)
+			fi, err := os.Lstat(test.target)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -918,7 +920,7 @@ func TestArchiverSaveDirIncremental(t *testing.T) {
 		arch.runWorkers(ctx, wg)
 		arch.summary = &Summary{}
 
-		fi, err := fs.Lstat(tempdir)
+		fi, err := os.Lstat(tempdir)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1120,7 +1122,7 @@ func TestArchiverSaveTree(t *testing.T) {
 				test.prepare(t)
 			}
 
-			atree, err := NewTree(testFS, test.targets)
+			atree, err := newTree(testFS, test.targets)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1447,6 +1449,66 @@ func TestArchiverSnapshot(t *testing.T) {
 	}
 }
 
+func TestResolveRelativeTargetsSpecial(t *testing.T) {
+	var tests = []struct {
+		name     string
+		targets  []string
+		expected []string
+		win      bool
+	}{
+		{
+			name:     "basic relative path",
+			targets:  []string{filepath.FromSlash("some/path")},
+			expected: []string{filepath.FromSlash("some/path")},
+		},
+		{
+			name:     "partial relative path",
+			targets:  []string{filepath.FromSlash("../some/path")},
+			expected: []string{filepath.FromSlash("../some/path")},
+		},
+		{
+			name:     "basic absolute path",
+			targets:  []string{filepath.FromSlash("/some/path")},
+			expected: []string{filepath.FromSlash("/some/path")},
+		},
+		{
+			name:     "volume name",
+			targets:  []string{"C:"},
+			expected: []string{"C:\\"},
+			win:      true,
+		},
+		{
+			name:     "volume root path",
+			targets:  []string{"C:\\"},
+			expected: []string{"C:\\"},
+			win:      true,
+		},
+		{
+			name:     "UNC path",
+			targets:  []string{"\\\\server\\volume"},
+			expected: []string{"\\\\server\\volume\\"},
+			win:      true,
+		},
+		{
+			name:     "UNC path with trailing slash",
+			targets:  []string{"\\\\server\\volume\\"},
+			expected: []string{"\\\\server\\volume\\"},
+			win:      true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.win && runtime.GOOS != "windows" {
+				t.Skip("skip test on unix")
+			}
+
+			targets, err := resolveRelativeTargets(&fs.Local{}, test.targets)
+			rtest.OK(t, err)
+			rtest.Equals(t, test.expected, targets)
+		})
+	}
+}
+
 func TestArchiverSnapshotSelect(t *testing.T) {
 	var tests = []struct {
 		name  string
@@ -1468,7 +1530,7 @@ func TestArchiverSnapshotSelect(t *testing.T) {
 				},
 				"other": TestFile{Content: "another file"},
 			},
-			selFn: func(item string, fi os.FileInfo) bool {
+			selFn: func(item string, fi os.FileInfo, _ fs.FS) bool {
 				return true
 			},
 		},
@@ -1485,7 +1547,7 @@ func TestArchiverSnapshotSelect(t *testing.T) {
 				},
 				"other": TestFile{Content: "another file"},
 			},
-			selFn: func(item string, fi os.FileInfo) bool {
+			selFn: func(item string, fi os.FileInfo, _ fs.FS) bool {
 				return false
 			},
 			err: "snapshot is empty",
@@ -1512,7 +1574,7 @@ func TestArchiverSnapshotSelect(t *testing.T) {
 				},
 				"other": TestFile{Content: "another file"},
 			},
-			selFn: func(item string, fi os.FileInfo) bool {
+			selFn: func(item string, fi os.FileInfo, _ fs.FS) bool {
 				return filepath.Ext(item) != ".txt"
 			},
 		},
@@ -1536,8 +1598,8 @@ func TestArchiverSnapshotSelect(t *testing.T) {
 				},
 				"other": TestFile{Content: "another file"},
 			},
-			selFn: func(item string, fi os.FileInfo) bool {
-				return filepath.Base(item) != "subdir"
+			selFn: func(item string, fi os.FileInfo, fs fs.FS) bool {
+				return fs.Base(item) != "subdir"
 			},
 		},
 		{
@@ -1545,8 +1607,8 @@ func TestArchiverSnapshotSelect(t *testing.T) {
 			src: TestDir{
 				"foo": TestFile{Content: "foo"},
 			},
-			selFn: func(item string, fi os.FileInfo) bool {
-				return filepath.IsAbs(item)
+			selFn: func(item string, fi os.FileInfo, fs fs.FS) bool {
+				return fs.IsAbs(item)
 			},
 		},
 	}
@@ -1601,15 +1663,6 @@ type MockFS struct {
 
 	m         sync.Mutex
 	bytesRead map[string]int // tracks bytes read from all opened files
-}
-
-func (m *MockFS) Open(name string) (fs.File, error) {
-	f, err := m.FS.Open(name)
-	if err != nil {
-		return f, err
-	}
-
-	return MockFile{File: f, fs: m, filename: name}, nil
 }
 
 func (m *MockFS) OpenFile(name string, flag int, perm os.FileMode) (fs.File, error) {
@@ -2000,14 +2053,6 @@ type TrackFS struct {
 	m      sync.Mutex
 }
 
-func (m *TrackFS) Open(name string) (fs.File, error) {
-	m.m.Lock()
-	m.opened[name]++
-	m.m.Unlock()
-
-	return m.FS.Open(name)
-}
-
 func (m *TrackFS) OpenFile(name string, flag int, perm os.FileMode) (fs.File, error) {
 	m.m.Lock()
 	m.opened[name]++
@@ -2230,13 +2275,14 @@ func TestMetadataChanged(t *testing.T) {
 
 	// get metadata
 	fi := lstat(t, "testfile")
-	want, err := restic.NodeFromFileInfo("testfile", fi, false)
+	localFS := &fs.Local{}
+	want, err := localFS.NodeFromFileInfo("testfile", fi, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	fs := &StatFS{
-		FS: fs.Local{},
+		FS: localFS,
 		OverrideLstat: map[string]os.FileInfo{
 			"testfile": fi,
 		},
@@ -2333,6 +2379,74 @@ func TestRacyFileSwap(t *testing.T) {
 	if err == nil {
 		t.Errorf("Save() should have failed")
 	}
+
+	if excluded {
+		t.Errorf("Save() excluded the node, that's unexpected")
+	}
+}
+
+func TestMetadataBackupErrorFiltering(t *testing.T) {
+	tempdir := t.TempDir()
+	repo := repository.TestRepository(t)
+
+	filename := filepath.Join(tempdir, "file")
+	rtest.OK(t, os.WriteFile(filename, []byte("example"), 0o600))
+	fi, err := os.Stat(filename)
+	rtest.OK(t, err)
+
+	arch := New(repo, fs.Local{}, Options{})
+
+	var filteredErr error
+	replacementErr := fmt.Errorf("replacement")
+	arch.Error = func(item string, err error) error {
+		filteredErr = err
+		return replacementErr
+	}
+
+	// check that errors from reading extended metadata are properly filtered
+	node, err := arch.nodeFromFileInfo("file", filename+"invalid", fi, false)
+	rtest.Assert(t, node != nil, "node is missing")
+	rtest.Assert(t, err == replacementErr, "expected %v got %v", replacementErr, err)
+	rtest.Assert(t, filteredErr != nil, "missing inner error")
+
+	// check that errors from reading irregular file are not filtered
+	filteredErr = nil
+	node, err = arch.nodeFromFileInfo("file", filename, wrapIrregularFileInfo(fi), false)
+	rtest.Assert(t, node != nil, "node is missing")
+	rtest.Assert(t, filteredErr == nil, "error for irregular node should not have been filtered")
+	rtest.Assert(t, strings.Contains(err.Error(), "irregular"), "unexpected error %q does not warn about irregular file mode", err)
+}
+
+func TestIrregularFile(t *testing.T) {
+	files := TestDir{
+		"testfile": TestFile{
+			Content: "foo bar test file",
+		},
+	}
+	tempdir, repo := prepareTempdirRepoSrc(t, files)
+
+	back := rtest.Chdir(t, tempdir)
+	defer back()
+
+	tempfile := filepath.Join(tempdir, "testfile")
+	fi := lstat(t, "testfile")
+
+	statfs := &StatFS{
+		FS: fs.Local{},
+		OverrideLstat: map[string]os.FileInfo{
+			tempfile: wrapIrregularFileInfo(fi),
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	arch := New(repo, fs.Track{FS: statfs}, Options{})
+	_, excluded, err := arch.save(ctx, "/", tempfile, nil)
+	if err == nil {
+		t.Fatalf("Save() should have failed")
+	}
+	rtest.Assert(t, strings.Contains(err.Error(), "irregular"), "unexpected error %q does not warn about irregular file mode", err)
 
 	if excluded {
 		t.Errorf("Save() excluded the node, that's unexpected")

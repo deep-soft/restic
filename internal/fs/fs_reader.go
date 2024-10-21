@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/restic/restic/internal/errors"
+	"github.com/restic/restic/internal/restic"
 )
 
 // Reader is a file system which provides a directory with a single file. When
@@ -39,29 +40,6 @@ func (fs *Reader) VolumeName(_ string) string {
 	return ""
 }
 
-// Open opens a file for reading.
-func (fs *Reader) Open(name string) (f File, err error) {
-	switch name {
-	case fs.Name:
-		fs.open.Do(func() {
-			f = newReaderFile(fs.ReadCloser, fs.fi(), fs.AllowEmptyFile)
-		})
-
-		if f == nil {
-			return nil, pathError("open", name, syscall.EIO)
-		}
-
-		return f, nil
-	case "/", ".":
-		f = fakeDir{
-			entries: []os.FileInfo{fs.fi()},
-		}
-		return f, nil
-	}
-
-	return nil, pathError("open", name, syscall.ENOENT)
-}
-
 func (fs *Reader) fi() os.FileInfo {
 	return fakeFileInfo{
 		name:    fs.Name,
@@ -82,15 +60,25 @@ func (fs *Reader) OpenFile(name string, flag int, _ os.FileMode) (f File, err er
 			fmt.Errorf("invalid combination of flags 0x%x", flag))
 	}
 
-	fs.open.Do(func() {
-		f = newReaderFile(fs.ReadCloser, fs.fi(), fs.AllowEmptyFile)
-	})
+	switch name {
+	case fs.Name:
+		fs.open.Do(func() {
+			f = newReaderFile(fs.ReadCloser, fs.fi(), fs.AllowEmptyFile)
+		})
 
-	if f == nil {
-		return nil, pathError("open", name, syscall.EIO)
+		if f == nil {
+			return nil, pathError("open", name, syscall.EIO)
+		}
+
+		return f, nil
+	case "/", ".":
+		f = fakeDir{
+			entries: []os.FileInfo{fs.fi()},
+		}
+		return f, nil
 	}
 
-	return f, nil
+	return nil, pathError("open", name, syscall.ENOENT)
 }
 
 // Stat returns a FileInfo describing the named file. If there is an error, it
@@ -133,6 +121,27 @@ func (fs *Reader) Lstat(name string) (os.FileInfo, error) {
 	}
 
 	return nil, pathError("lstat", name, os.ErrNotExist)
+}
+
+func (fs *Reader) DeviceID(_ os.FileInfo) (deviceID uint64, err error) {
+	return 0, errors.New("Device IDs are not supported")
+}
+
+func (fs *Reader) ExtendedStat(fi os.FileInfo) ExtendedFileInfo {
+	return ExtendedFileInfo{
+		FileInfo: fi,
+	}
+}
+
+func (fs *Reader) NodeFromFileInfo(path string, fi os.FileInfo, _ bool) (*restic.Node, error) {
+	node := buildBasicNode(path, fi)
+
+	// fill minimal info with current values for uid, gid
+	node.UID = uint32(os.Getuid())
+	node.GID = uint32(os.Getgid())
+	node.ChangeTime = node.ModTime
+
+	return node, nil
 }
 
 // Join joins any number of path elements into a single path, adding a
@@ -232,20 +241,8 @@ type fakeFile struct {
 // ensure that fakeFile implements File
 var _ File = fakeFile{}
 
-func (f fakeFile) Fd() uintptr {
-	return 0
-}
-
 func (f fakeFile) Readdirnames(_ int) ([]string, error) {
 	return nil, pathError("readdirnames", f.name, os.ErrInvalid)
-}
-
-func (f fakeFile) Readdir(_ int) ([]os.FileInfo, error) {
-	return nil, pathError("readdir", f.name, os.ErrInvalid)
-}
-
-func (f fakeFile) Seek(int64, int) (int64, error) {
-	return 0, pathError("seek", f.name, os.ErrInvalid)
 }
 
 func (f fakeFile) Read(_ []byte) (int, error) {
@@ -280,13 +277,6 @@ func (d fakeDir) Readdirnames(n int) ([]string, error) {
 	}
 
 	return names, nil
-}
-
-func (d fakeDir) Readdir(n int) ([]os.FileInfo, error) {
-	if n > 0 {
-		return nil, pathError("readdir", d.name, errors.New("not implemented"))
-	}
-	return d.entries, nil
 }
 
 // fakeFileInfo implements the bare minimum of os.FileInfo.

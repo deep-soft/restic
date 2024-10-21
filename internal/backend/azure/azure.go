@@ -125,13 +125,10 @@ func open(cfg Config, rt http.RoundTripper) (*Backend, error) {
 	}
 
 	be := &Backend{
-		container:   client,
-		cfg:         cfg,
-		connections: cfg.Connections,
-		Layout: &layout.DefaultLayout{
-			Path: cfg.Prefix,
-			Join: path.Join,
-		},
+		container:    client,
+		cfg:          cfg,
+		connections:  cfg.Connections,
+		Layout:       layout.NewDefaultLayout(cfg.Prefix, path.Join),
 		listMaxItems: defaultListMaxItems,
 	}
 
@@ -160,6 +157,12 @@ func Create(ctx context.Context, cfg Config, rt http.RoundTripper) (*Backend, er
 		if err != nil {
 			return nil, errors.Wrap(err, "container.Create")
 		}
+	} else if err != nil && bloberror.HasCode(err, bloberror.AuthorizationFailure) {
+		// We ignore this Auth. Failure, as the failure is related to the type
+		// of SAS/SAT, not an actual real failure. If the token is invalid, we
+		// fail later on anyway.
+		// For details see Issue #4004.
+		debug.Log("Ignoring AuthorizationFailure when calling GetProperties")
 	} else if err != nil {
 		return be, errors.Wrap(err, "container.GetProperties")
 	}
@@ -189,11 +192,6 @@ func (be *Backend) IsPermanentError(err error) bool {
 		}
 	}
 	return false
-}
-
-// Join combines path components with slashes.
-func (be *Backend) Join(p ...string) string {
-	return path.Join(p...)
 }
 
 func (be *Backend) Connections() uint {

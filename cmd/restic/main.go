@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/restic/restic/internal/errors"
 	"github.com/restic/restic/internal/feature"
 	"github.com/restic/restic/internal/options"
+	"github.com/restic/restic/internal/repository"
 	"github.com/restic/restic/internal/restic"
 )
 
@@ -82,6 +84,22 @@ The full documentation can be found at https://restic.readthedocs.io/ .
 	},
 }
 
+var cmdGroupDefault = "default"
+var cmdGroupAdvanced = "advanced"
+
+func init() {
+	cmdRoot.AddGroup(
+		&cobra.Group{
+			ID:    cmdGroupDefault,
+			Title: "Available Commands:",
+		},
+		&cobra.Group{
+			ID:    cmdGroupAdvanced,
+			Title: "Advanced Options:",
+		},
+	)
+}
+
 // Distinguish commands that need the password from those that work without,
 // so we don't run $RESTIC_PASSWORD_COMMAND for no reason (it might prompt the
 // user for authentication).
@@ -99,6 +117,30 @@ func tweakGoGC() {
 	oldValue := godebug.SetGCPercent(50)
 	if oldValue != 100 {
 		godebug.SetGCPercent(oldValue)
+	}
+}
+
+func printExitError(code int, message string) {
+	if globalOptions.JSON {
+		type jsonExitError struct {
+			MessageType string `json:"message_type"` // exit_error
+			Code        int    `json:"code"`
+			Message     string `json:"message"`
+		}
+
+		jsonS := jsonExitError{
+			MessageType: "exit_error",
+			Code:        code,
+			Message:     message,
+		}
+
+		err := json.NewEncoder(globalOptions.stderr).Encode(jsonS)
+		if err != nil {
+			Warnf("JSON encode failed: %v\n", err)
+			return
+		}
+	} else {
+		fmt.Fprintf(globalOptions.stderr, "%v\n", message)
 	}
 }
 
@@ -131,21 +173,24 @@ func main() {
 		err = nil
 	}
 
+	var exitMessage string
 	switch {
 	case restic.IsAlreadyLocked(err):
-		fmt.Fprintf(os.Stderr, "%v\nthe `unlock` command can be used to remove stale locks\n", err)
+		exitMessage = fmt.Sprintf("%v\nthe `unlock` command can be used to remove stale locks", err)
 	case err == ErrInvalidSourceData:
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		exitMessage = fmt.Sprintf("Warning: %v", err)
 	case errors.IsFatal(err):
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		exitMessage = err.Error()
+	case errors.Is(err, repository.ErrNoKeyFound):
+		exitMessage = fmt.Sprintf("Fatal: %v", err)
 	case err != nil:
-		fmt.Fprintf(os.Stderr, "%+v\n", err)
+		exitMessage = fmt.Sprintf("%+v", err)
 
 		if logBuffer.Len() > 0 {
-			fmt.Fprintf(os.Stderr, "also, the following messages were logged by a library:\n")
+			exitMessage += "also, the following messages were logged by a library:\n"
 			sc := bufio.NewScanner(logBuffer)
 			for sc.Scan() {
-				fmt.Fprintln(os.Stderr, sc.Text())
+				exitMessage += fmt.Sprintln(sc.Text())
 			}
 		}
 	}
@@ -160,10 +205,16 @@ func main() {
 		exitCode = 10
 	case restic.IsAlreadyLocked(err):
 		exitCode = 11
+	case errors.Is(err, repository.ErrNoKeyFound):
+		exitCode = 12
 	case errors.Is(err, context.Canceled):
 		exitCode = 130
 	default:
 		exitCode = 1
+	}
+
+	if exitCode != 0 {
+		printExitError(exitCode, exitMessage)
 	}
 	Exit(exitCode)
 }

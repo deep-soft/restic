@@ -39,6 +39,8 @@ Note that restic will also return exit code ``1`` if a different error is encoun
 If there are no errors, restic will return a zero exit code and print the repository
 metadata.
 
+.. _exit-codes:
+
 Exit codes
 **********
 
@@ -63,6 +65,8 @@ a more specific description.
 +-----+----------------------------------------------------+
 | 11  | Failed to lock repository (since restic 0.17.0)    |
 +-----+----------------------------------------------------+
+| 12  | Wrong password (since restic 0.17.1)               |
++-----+----------------------------------------------------+
 | 130 | Restic was interrupted using SIGINT or SIGSTOP     |
 +-----+----------------------------------------------------+
 
@@ -83,12 +87,33 @@ JSON output of most restic commands are documented here.
     list of allowed values is documented may be extended at any time.
 
 
+Exit errors
+-----------
+
+Fatal errors will result in a final JSON message on ``stderr`` before the process exits.
+It will hold the error message and the exit code.
+
+.. note::
+    Some errors cannot be caught and reported this way,
+    such as Go runtime errors or command line parsing errors.
+
++----------------------+-------------------------------------------+
+| ``message_type``     | Always "exit_error"                       |
++----------------------+-------------------------------------------+
+| ``code``             | Exit code (see above chart)               |
++----------------------+-------------------------------------------+
+| ``message``          | Error message                             |
++----------------------+-------------------------------------------+
+
 Output formats
 --------------
 
-Currently only the output on ``stdout`` is JSON formatted. Errors printed on ``stderr``
-are still printed as plain text messages. The generated JSON output uses one of the
-following two formats.
+Commands print their main JSON output on ``stdout``.
+The generated JSON output uses one of the following two formats.
+
+.. note::
+    Not all messages and errors have been converted to JSON yet.
+    Feel free to submit a pull request!
 
 Single JSON document
 ^^^^^^^^^^^^^^^^^^^^
@@ -136,10 +161,12 @@ Status
 Error
 ^^^^^
 
+These errors are printed on ``stderr``.
+
 +----------------------+-------------------------------------------+
 | ``message_type``     | Always "error"                            |
 +----------------------+-------------------------------------------+
-| ``error``            | Error message                             |
+| ``error.message``    | Error message                             |
 +----------------------+-------------------------------------------+
 | ``during``           | What restic was trying to do              |
 +----------------------+-------------------------------------------+
@@ -539,6 +566,21 @@ Status
 |``bytes_skipped``     | Total size of skipped files                                |
 +----------------------+------------------------------------------------------------+
 
+Error
+^^^^^
+
+These errors are printed on ``stderr``.
+
++----------------------+-------------------------------------------+
+| ``message_type``     | Always "error"                            |
++----------------------+-------------------------------------------+
+| ``error.message``    | Error message                             |
++----------------------+-------------------------------------------+
+| ``during``           | Always "restore"                          |
++----------------------+-------------------------------------------+
+| ``item``             | Usually, the path of the problematic file |
++----------------------+-------------------------------------------+
+
 Verbose Status
 ^^^^^^^^^^^^^^
 
@@ -678,12 +720,14 @@ version
 
 The version command returns a single JSON object.
 
-+----------------+--------------------+
-| ``version``    | restic version     |
-+----------------+--------------------+
-| ``go_version`` | Go compile version |
-+----------------+--------------------+
-| ``go_os``      | Go OS              |
-+----------------+--------------------+
-| ``go_arch``    | Go architecture    |
-+----------------+--------------------+
++------------------+--------------------+
+| ``message_type`` | Always "version"   |
++------------------+--------------------+
+| ``version``      | restic version     |
++------------------+--------------------+
+| ``go_version``   | Go compile version |
++------------------+--------------------+
+| ``go_os``        | Go OS              |
++------------------+--------------------+
+| ``go_arch``      | Go architecture    |
++------------------+--------------------+

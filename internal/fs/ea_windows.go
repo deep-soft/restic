@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -55,14 +56,14 @@ var (
 	errEaValueTooLarge = errors.New("extended attribute value too large")
 )
 
-// ExtendedAttribute represents a single Windows EA.
-type ExtendedAttribute struct {
+// extendedAttribute represents a single Windows EA.
+type extendedAttribute struct {
 	Name  string
 	Value []byte
 	Flags uint8
 }
 
-func parseEa(b []byte) (ea ExtendedAttribute, nb []byte, err error) {
+func parseEa(b []byte) (ea extendedAttribute, nb []byte, err error) {
 	var info fileFullEaInformation
 	err = binary.Read(bytes.NewReader(b), binary.LittleEndian, &info)
 	if err != nil {
@@ -89,9 +90,9 @@ func parseEa(b []byte) (ea ExtendedAttribute, nb []byte, err error) {
 	return ea, nb, err
 }
 
-// DecodeExtendedAttributes decodes a list of EAs from a FILE_FULL_EA_INFORMATION
+// decodeExtendedAttributes decodes a list of EAs from a FILE_FULL_EA_INFORMATION
 // buffer retrieved from BackupRead, ZwQueryEaFile, etc.
-func DecodeExtendedAttributes(b []byte) (eas []ExtendedAttribute, err error) {
+func decodeExtendedAttributes(b []byte) (eas []extendedAttribute, err error) {
 	for len(b) != 0 {
 		ea, nb, err := parseEa(b)
 		if err != nil {
@@ -104,7 +105,7 @@ func DecodeExtendedAttributes(b []byte) (eas []ExtendedAttribute, err error) {
 	return eas, err
 }
 
-func writeEa(buf *bytes.Buffer, ea *ExtendedAttribute, last bool) error {
+func writeEa(buf *bytes.Buffer, ea *extendedAttribute, last bool) error {
 	if int(uint8(len(ea.Name))) != len(ea.Name) {
 		return errEaNameTooLarge
 	}
@@ -152,9 +153,9 @@ func writeEa(buf *bytes.Buffer, ea *ExtendedAttribute, last bool) error {
 	return nil
 }
 
-// EncodeExtendedAttributes encodes a list of EAs into a FILE_FULL_EA_INFORMATION
+// encodeExtendedAttributes encodes a list of EAs into a FILE_FULL_EA_INFORMATION
 // buffer for use with BackupWrite, ZwSetEaFile, etc.
-func EncodeExtendedAttributes(eas []ExtendedAttribute) ([]byte, error) {
+func encodeExtendedAttributes(eas []extendedAttribute) ([]byte, error) {
 	var buf bytes.Buffer
 	for i := range eas {
 		last := false
@@ -216,11 +217,11 @@ const (
 	STATUS_NO_EAS_ON_FILE = -1073741742
 )
 
-// GetFileEA retrieves the extended attributes for the file represented by `handle`. The
+// fgetEA retrieves the extended attributes for the file represented by `handle`. The
 // `handle` must have been opened with file access flag FILE_READ_EA (0x8).
 // The extended file attribute names in windows are case-insensitive and when fetching
 // the attributes the names are generally returned in UPPER case.
-func GetFileEA(handle windows.Handle) ([]ExtendedAttribute, error) {
+func fgetEA(handle windows.Handle) ([]extendedAttribute, error) {
 	// default buffer size to start with
 	bufLen := 1024
 	buf := make([]byte, bufLen)
@@ -245,13 +246,13 @@ func GetFileEA(handle windows.Handle) ([]ExtendedAttribute, error) {
 		}
 		break
 	}
-	return DecodeExtendedAttributes(buf)
+	return decodeExtendedAttributes(buf)
 }
 
-// SetFileEA sets the extended attributes for the file represented by `handle`.  The
+// fsetEA sets the extended attributes for the file represented by `handle`.  The
 // handle must have been opened with the file access flag FILE_WRITE_EA(0x10).
-func SetFileEA(handle windows.Handle, attrs []ExtendedAttribute) error {
-	encodedEA, err := EncodeExtendedAttributes(attrs)
+func fsetEA(handle windows.Handle, attrs []extendedAttribute) error {
+	encodedEA, err := encodeExtendedAttributes(attrs)
 	if err != nil {
 		return fmt.Errorf("failed to encoded extended attributes: %w", err)
 	}
@@ -282,4 +283,36 @@ func setFileEA(handle windows.Handle, iosb *ioStatusBlock, buf *uint8, bufLen ui
 	r0, _, _ := syscall.SyscallN(procNtSetEaFile.Addr(), uintptr(handle), uintptr(unsafe.Pointer(iosb)), uintptr(unsafe.Pointer(buf)), uintptr(bufLen))
 	status = ntStatus(r0)
 	return
+}
+
+// pathSupportsExtendedAttributes returns true if the path supports extended attributes.
+func pathSupportsExtendedAttributes(path string) (supported bool, err error) {
+	var fileSystemFlags uint32
+	utf16Path, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return false, err
+	}
+	err = windows.GetVolumeInformation(utf16Path, nil, 0, nil, nil, &fileSystemFlags, nil, 0)
+	if err != nil {
+		return false, err
+	}
+	supported = (fileSystemFlags & windows.FILE_SUPPORTS_EXTENDED_ATTRIBUTES) != 0
+	return supported, nil
+}
+
+// getVolumePathName returns the volume path name for the given path.
+func getVolumePathName(path string) (volumeName string, err error) {
+	utf16Path, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return "", err
+	}
+	// Get the volume path (e.g., "D:")
+	var volumePath [windows.MAX_PATH + 1]uint16
+	err = windows.GetVolumePathName(utf16Path, &volumePath[0], windows.MAX_PATH+1)
+	if err != nil {
+		return "", err
+	}
+	// Trim any trailing backslashes
+	volumeName = strings.TrimRight(windows.UTF16ToString(volumePath[:]), "\\")
+	return volumeName, nil
 }

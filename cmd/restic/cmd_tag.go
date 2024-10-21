@@ -29,7 +29,9 @@ Exit status is 0 if the command was successful.
 Exit status is 1 if there was any error.
 Exit status is 10 if the repository does not exist.
 Exit status is 11 if the repository is already locked.
+Exit status is 12 if the password is incorrect.
 `,
+	GroupID:           cmdGroupDefault,
 	DisableAutoGenTag: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runTag(cmd.Context(), tagOptions, globalOptions, args)
@@ -108,7 +110,7 @@ func runTag(ctx context.Context, opts TagOptions, gopts GlobalOptions, args []st
 	Verbosef("create exclusive lock for repository\n")
 	ctx, repo, unlock, err := openWithExclusiveLock(ctx, gopts, false)
 	if err != nil {
-		return nil
+		return err
 	}
 	defer unlock()
 

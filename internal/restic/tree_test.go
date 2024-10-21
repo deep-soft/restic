@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/restic/restic/internal/archiver"
+	"github.com/restic/restic/internal/fs"
 	"github.com/restic/restic/internal/repository"
 	"github.com/restic/restic/internal/restic"
 	rtest "github.com/restic/restic/internal/test"
@@ -83,10 +84,11 @@ func TestNodeMarshal(t *testing.T) {
 }
 
 func TestNodeComparison(t *testing.T) {
-	fi, err := os.Lstat("tree_test.go")
+	fs := &fs.Local{}
+	fi, err := fs.Lstat("tree_test.go")
 	rtest.OK(t, err)
 
-	node, err := restic.NodeFromFileInfo("tree_test.go", fi, false)
+	node, err := fs.NodeFromFileInfo("tree_test.go", fi, false)
 	rtest.OK(t, err)
 
 	n2 := *node
@@ -125,9 +127,10 @@ func TestTreeEqualSerialization(t *testing.T) {
 		builder := restic.NewTreeJSONBuilder()
 
 		for _, fn := range files[:i] {
-			fi, err := os.Lstat(fn)
+			fs := &fs.Local{}
+			fi, err := fs.Lstat(fn)
 			rtest.OK(t, err)
-			node, err := restic.NodeFromFileInfo(fn, fi, false)
+			node, err := fs.NodeFromFileInfo(fn, fi, false)
 			rtest.OK(t, err)
 
 			rtest.OK(t, tree.Insert(node))

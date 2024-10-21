@@ -50,16 +50,6 @@ jobs:
             os: ubuntu-latest
             test_fuse: true
 
-          - job_name: Linux
-            go: 1.20.x
-            os: ubuntu-latest
-            test_fuse: true
-
-          - job_name: Linux
-            go: 1.19.x
-            os: ubuntu-latest
-            test_fuse: true
-
     name: ${{ matrix.job_name }} Go ${{ matrix.go }}
     runs-on: ${{ matrix.os }}
 
@@ -67,6 +57,9 @@ jobs:
       GOPROXY: https://proxy.golang.org
 
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
       - name: Set up Go ${{ matrix.go }}
         uses: actions/setup-go@v5
         with:
@@ -139,9 +132,6 @@ jobs:
           # add $USERPROFILE/tar/bin to path
           echo $Env:USERPROFILE\tar\bin >> $Env:GITHUB_PATH
         if: matrix.os == 'windows-latest'
-
-      - name: Check out code
-        uses: actions/checkout@v4
 
       - name: Build with build.go
         run: |
@@ -231,13 +221,13 @@ jobs:
     name: Cross Compile for subset ${{ matrix.subset }}
 
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
       - name: Set up Go ${{ env.latest_go }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.latest_go }}
-
-      - name: Check out code
-        uses: actions/checkout@v4
 
       - name: Cross-compile for subset ${{ matrix.subset }}
         run: |
@@ -253,13 +243,13 @@ jobs:
       # allow annotating code in the PR
       checks: write
     steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
       - name: Set up Go ${{ env.latest_go }}
         uses: actions/setup-go@v5
         with:
           go-version: ${{ env.latest_go }}
-
-      - name: Check out code
-        uses: actions/checkout@v4
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v6

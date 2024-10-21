@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"path"
 	"strings"
 
 	"github.com/restic/restic/internal/backend"
@@ -66,7 +65,7 @@ func Open(_ context.Context, cfg Config, rt http.RoundTripper) (*Backend, error)
 	be := &Backend{
 		url:         cfg.URL,
 		client:      http.Client{Transport: rt},
-		Layout:      &layout.RESTLayout{URL: url, Join: path.Join},
+		Layout:      layout.NewRESTLayout(url),
 		connections: cfg.Connections,
 	}
 
@@ -142,6 +141,12 @@ func (b *Backend) Save(ctx context.Context, h backend.Handle, rd backend.RewindR
 		http.MethodPost, b.Filename(h), io.NopCloser(rd))
 	if err != nil {
 		return errors.WithStack(err)
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		if err := rd.Rewind(); err != nil {
+			return nil, err
+		}
+		return io.NopCloser(rd), nil
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Accept", ContentTypeV2)

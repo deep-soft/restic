@@ -15,7 +15,6 @@ import (
 	"github.com/restic/restic/internal/errors"
 	"github.com/restic/restic/internal/restic"
 
-	resticfs "github.com/restic/restic/internal/fs"
 	"github.com/restic/restic/internal/fuse"
 
 	systemFuse "github.com/anacrolix/fuse"
@@ -68,8 +67,10 @@ Exit status is 0 if the command was successful.
 Exit status is 1 if there was any error.
 Exit status is 10 if the repository does not exist.
 Exit status is 11 if the repository is already locked.
+Exit status is 12 if the password is incorrect.
 `,
 	DisableAutoGenTag: true,
+	GroupID:           cmdGroupDefault,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runMount(cmd.Context(), mountOptions, globalOptions, args)
 	},
@@ -120,7 +121,7 @@ func runMount(ctx context.Context, opts MountOptions, gopts GlobalOptions, args 
 
 	// Check the existence of the mount point at the earliest stage to
 	// prevent unnecessary computations while opening the repository.
-	if _, err := resticfs.Stat(mountpoint); errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(mountpoint); errors.Is(err, os.ErrNotExist) {
 		Verbosef("Mountpoint %s doesn't exist\n", mountpoint)
 		return err
 	}
