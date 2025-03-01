@@ -15,12 +15,16 @@ import (
 	"github.com/restic/restic/internal/ui/termstatus"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
-var cmdRestore = &cobra.Command{
-	Use:   "restore [flags] snapshotID",
-	Short: "Extract the data from a snapshot",
-	Long: `
+func newRestoreCommand() *cobra.Command {
+	var opts RestoreOptions
+
+	cmd := &cobra.Command{
+		Use:   "restore [flags] snapshotID",
+		Short: "Extract the data from a snapshot",
+		Long: `
 The "restore" command extracts the data from a snapshot from the repository to
 a directory.
 
@@ -39,13 +43,17 @@ Exit status is 10 if the repository does not exist.
 Exit status is 11 if the repository is already locked.
 Exit status is 12 if the password is incorrect.
 `,
-	GroupID:           cmdGroupDefault,
-	DisableAutoGenTag: true,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		term, cancel := setupTermstatus()
-		defer cancel()
-		return runRestore(cmd.Context(), restoreOptions, globalOptions, term, args)
-	},
+		GroupID:           cmdGroupDefault,
+		DisableAutoGenTag: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			term, cancel := setupTermstatus()
+			defer cancel()
+			return runRestore(cmd.Context(), opts, globalOptions, term, args)
+		},
+	}
+
+	opts.AddFlags(cmd.Flags())
+	return cmd
 }
 
 // RestoreOptions collects all options for the restore command.
@@ -54,30 +62,30 @@ type RestoreOptions struct {
 	filter.IncludePatternOptions
 	Target string
 	restic.SnapshotFilter
-	DryRun    bool
-	Sparse    bool
-	Verify    bool
-	Overwrite restorer.OverwriteBehavior
-	Delete    bool
+	DryRun              bool
+	Sparse              bool
+	Verify              bool
+	Overwrite           restorer.OverwriteBehavior
+	Delete              bool
+	ExcludeXattrPattern []string
+	IncludeXattrPattern []string
 }
 
-var restoreOptions RestoreOptions
+func (opts *RestoreOptions) AddFlags(f *pflag.FlagSet) {
+	f.StringVarP(&opts.Target, "target", "t", "", "directory to extract data to")
 
-func init() {
-	cmdRoot.AddCommand(cmdRestore)
+	opts.ExcludePatternOptions.Add(f)
+	opts.IncludePatternOptions.Add(f)
 
-	flags := cmdRestore.Flags()
-	flags.StringVarP(&restoreOptions.Target, "target", "t", "", "directory to extract data to")
+	f.StringArrayVar(&opts.ExcludeXattrPattern, "exclude-xattr", nil, "exclude xattr by `pattern` (can be specified multiple times)")
+	f.StringArrayVar(&opts.IncludeXattrPattern, "include-xattr", nil, "include xattr by `pattern` (can be specified multiple times)")
 
-	restoreOptions.ExcludePatternOptions.Add(flags)
-	restoreOptions.IncludePatternOptions.Add(flags)
-
-	initSingleSnapshotFilter(flags, &restoreOptions.SnapshotFilter)
-	flags.BoolVar(&restoreOptions.DryRun, "dry-run", false, "do not write any data, just show what would be done")
-	flags.BoolVar(&restoreOptions.Sparse, "sparse", false, "restore files as sparse")
-	flags.BoolVar(&restoreOptions.Verify, "verify", false, "verify restored files content")
-	flags.Var(&restoreOptions.Overwrite, "overwrite", "overwrite behavior, one of (always|if-changed|if-newer|never) (default: always)")
-	flags.BoolVar(&restoreOptions.Delete, "delete", false, "delete files from target directory if they do not exist in snapshot. Use '--dry-run -vv' to check what would be deleted")
+	initSingleSnapshotFilter(f, &opts.SnapshotFilter)
+	f.BoolVar(&opts.DryRun, "dry-run", false, "do not write any data, just show what would be done")
+	f.BoolVar(&opts.Sparse, "sparse", false, "restore files as sparse")
+	f.BoolVar(&opts.Verify, "verify", false, "verify restored files content")
+	f.Var(&opts.Overwrite, "overwrite", "overwrite behavior, one of (always|if-changed|if-newer|never) (default: always)")
+	f.BoolVar(&opts.Delete, "delete", false, "delete files from target directory if they do not exist in snapshot. Use '--dry-run -vv' to check what would be deleted")
 }
 
 func runRestore(ctx context.Context, opts RestoreOptions, gopts GlobalOptions,
@@ -110,6 +118,7 @@ func runRestore(ctx context.Context, opts RestoreOptions, gopts GlobalOptions,
 	if hasExcludes && hasIncludes {
 		return errors.Fatal("exclude and include patterns are mutually exclusive")
 	}
+
 	if opts.DryRun && opts.Verify {
 		return errors.Fatal("--dry-run and --verify are mutually exclusive")
 	}
@@ -173,6 +182,12 @@ func runRestore(ctx context.Context, opts RestoreOptions, gopts GlobalOptions,
 	res.Warn = func(message string) {
 		msg.E("Warning: %s\n", message)
 	}
+	res.Info = func(message string) {
+		if gopts.JSON {
+			return
+		}
+		msg.P("Info: %s\n", message)
+	}
 
 	selectExcludeFilter := func(item string, isDir bool) (selectedForRestore bool, childMayBeSelected bool) {
 		matched := false
@@ -219,6 +234,11 @@ func runRestore(ctx context.Context, opts RestoreOptions, gopts GlobalOptions,
 		res.SelectFilter = selectIncludeFilter
 	}
 
+	res.XattrSelectFilter, err = getXattrSelectFilter(opts)
+	if err != nil {
+		return err
+	}
+
 	if !gopts.JSON {
 		msg.P("restoring %s to %s\n", res.Snapshot(), opts.Target)
 	}
@@ -256,4 +276,39 @@ func runRestore(ctx context.Context, opts RestoreOptions, gopts GlobalOptions,
 	}
 
 	return nil
+}
+
+func getXattrSelectFilter(opts RestoreOptions) (func(xattrName string) bool, error) {
+	hasXattrExcludes := len(opts.ExcludeXattrPattern) > 0
+	hasXattrIncludes := len(opts.IncludeXattrPattern) > 0
+
+	if hasXattrExcludes && hasXattrIncludes {
+		return nil, errors.Fatal("exclude and include xattr patterns are mutually exclusive")
+	}
+
+	if hasXattrExcludes {
+		if err := filter.ValidatePatterns(opts.ExcludeXattrPattern); err != nil {
+			return nil, errors.Fatalf("--exclude-xattr: %s", err)
+		}
+
+		return func(xattrName string) bool {
+			shouldReject := filter.RejectByPattern(opts.ExcludeXattrPattern, Warnf)(xattrName)
+			return !shouldReject
+		}, nil
+	}
+
+	if hasXattrIncludes {
+		// User has either input include xattr pattern(s) or we're using our default include pattern
+		if err := filter.ValidatePatterns(opts.IncludeXattrPattern); err != nil {
+			return nil, errors.Fatalf("--include-xattr: %s", err)
+		}
+
+		return func(xattrName string) bool {
+			shouldInclude, _ := filter.IncludeByPattern(opts.IncludeXattrPattern, Warnf)(xattrName)
+			return shouldInclude
+		}, nil
+	}
+
+	// default to including all xattrs
+	return func(_ string) bool { return true }, nil
 }

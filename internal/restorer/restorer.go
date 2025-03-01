@@ -28,9 +28,12 @@ type Restorer struct {
 
 	Error func(location string, err error) error
 	Warn  func(message string)
+	Info  func(message string)
 	// SelectFilter determines whether the item is selectedForRestore or whether a childMayBeSelected.
 	// selectedForRestore must not depend on isDir as `removeUnexpectedFiles` always passes false to isDir.
 	SelectFilter func(item string, isDir bool) (selectedForRestore bool, childMayBeSelected bool)
+
+	XattrSelectFilter func(xattrName string) (xattrSelectedForRestore bool)
 }
 
 var restorerAbortOnAllErrors = func(_ string, err error) error { return err }
@@ -97,12 +100,13 @@ func (c *OverwriteBehavior) Type() string {
 // NewRestorer creates a restorer preloaded with the content from the snapshot id.
 func NewRestorer(repo restic.Repository, sn *restic.Snapshot, opts Options) *Restorer {
 	r := &Restorer{
-		repo:         repo,
-		opts:         opts,
-		fileList:     make(map[string]bool),
-		Error:        restorerAbortOnAllErrors,
-		SelectFilter: func(string, bool) (bool, bool) { return true, true },
-		sn:           sn,
+		repo:              repo,
+		opts:              opts,
+		fileList:          make(map[string]bool),
+		Error:             restorerAbortOnAllErrors,
+		SelectFilter:      func(string, bool) (bool, bool) { return true, true },
+		XattrSelectFilter: func(string) bool { return true },
+		sn:                sn,
 	}
 
 	return r
@@ -288,7 +292,7 @@ func (res *Restorer) restoreNodeMetadataTo(node *restic.Node, target, location s
 		return nil
 	}
 	debug.Log("restoreNodeMetadata %v %v %v", node.Name, target, location)
-	err := fs.NodeRestoreMetadata(node, target, res.Warn)
+	err := fs.NodeRestoreMetadata(node, target, res.Warn, res.XattrSelectFilter)
 	if err != nil {
 		debug.Log("node.RestoreMetadata(%s) error %v", target, err)
 	}
@@ -354,8 +358,9 @@ func (res *Restorer) RestoreTo(ctx context.Context, dst string) (uint64, error) 
 
 	idx := NewHardlinkIndex[string]()
 	filerestorer := newFileRestorer(dst, res.repo.LoadBlobsFromPack, res.repo.LookupBlob,
-		res.repo.Connections(), res.opts.Sparse, res.opts.Delete, res.opts.Progress)
+		res.repo.Connections(), res.opts.Sparse, res.opts.Delete, res.repo.StartWarmup, res.opts.Progress)
 	filerestorer.Error = res.Error
+	filerestorer.Info = res.Info
 
 	debug.Log("first pass for %q", dst)
 
@@ -511,11 +516,29 @@ func (res *Restorer) removeUnexpectedFiles(ctx context.Context, target, location
 		selectedForRestore, _ := res.SelectFilter(nodeLocation, false)
 		// only delete files that were selected for restore
 		if selectedForRestore {
-			res.opts.Progress.ReportDeletedFile(nodeLocation)
+			// First collect all files that will be deleted
+			var filesToDelete []string
+			err := filepath.Walk(nodeTarget, func(path string, _ os.FileInfo, err error) error {
+				if err != nil {
+					return err
+				}
+				filesToDelete = append(filesToDelete, path)
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+
 			if !res.opts.DryRun {
+				// Perform the deletion
 				if err := fs.RemoveAll(nodeTarget); err != nil {
 					return err
 				}
+			}
+
+			// Report paths as deleted only after successful removal
+			for i := len(filesToDelete) - 1; i >= 0; i-- {
+				res.opts.Progress.ReportDeletion(filesToDelete[i])
 			}
 		}
 	}

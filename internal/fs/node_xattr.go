@@ -1,5 +1,5 @@
-//go:build darwin || freebsd || linux || solaris
-// +build darwin freebsd linux solaris
+//go:build darwin || freebsd || netbsd || linux || solaris
+// +build darwin freebsd netbsd linux solaris
 
 package fs
 
@@ -65,24 +65,17 @@ func handleXattrErr(err error) error {
 	}
 }
 
-// nodeRestoreGenericAttributes is no-op.
-func nodeRestoreGenericAttributes(node *restic.Node, _ string, warn func(msg string)) error {
-	return restic.HandleAllUnknownGenericAttributesFound(node.GenericAttributes, warn)
-}
-
-// nodeFillGenericAttributes is a no-op.
-func nodeFillGenericAttributes(_ *restic.Node, _ string, _ *ExtendedFileInfo) (allowExtended bool, err error) {
-	return true, nil
-}
-
-func nodeRestoreExtendedAttributes(node *restic.Node, path string) error {
+func nodeRestoreExtendedAttributes(node *restic.Node, path string, xattrSelectFilter func(xattrName string) bool) error {
 	expectedAttrs := map[string]struct{}{}
 	for _, attr := range node.ExtendedAttributes {
-		err := setxattr(path, attr.Name, attr.Value)
-		if err != nil {
-			return err
+		// Only restore xattrs that match the filter
+		if xattrSelectFilter(attr.Name) {
+			err := setxattr(path, attr.Name, attr.Value)
+			if err != nil {
+				return err
+			}
+			expectedAttrs[attr.Name] = struct{}{}
 		}
-		expectedAttrs[attr.Name] = struct{}{}
 	}
 
 	// remove unexpected xattrs
@@ -94,8 +87,11 @@ func nodeRestoreExtendedAttributes(node *restic.Node, path string) error {
 		if _, ok := expectedAttrs[name]; ok {
 			continue
 		}
-		if err := removexattr(path, name); err != nil {
-			return err
+		// Only attempt to remove xattrs that match the filter
+		if xattrSelectFilter(name) {
+			if err := removexattr(path, name); err != nil {
+				return err
+			}
 		}
 	}
 
